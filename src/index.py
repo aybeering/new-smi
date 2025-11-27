@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import hnswlib
 import numpy as np
@@ -27,13 +27,15 @@ class SimpleHNSW:
         ids: np.ndarray,
         m: int = 64,
         ef_construction: int = 200,
+        allow_replace_deleted: bool = True,
     ) -> None:
         self.index.init_index(
             max_elements=len(ids),
             ef_construction=ef_construction,
             M=m,
+            allow_replace_deleted=allow_replace_deleted,
         )
-        # replace_deleted requires allow_replace_deleted=True during init_index; avoid for compatibility.
+        # replace_deleted requires allow_replace_deleted=True during init_index.
         self.index.add_items(embeddings, ids)
         self.index.set_ef(ef_construction)
 
@@ -50,10 +52,7 @@ class SimpleHNSW:
 
 
 def load_embeddings(parquet_path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(parquet_path)
-    if "embedding" not in df.columns:
-        raise ValueError("Expected an 'embedding' column in the parquet file.")
-    return df
+    return pd.read_parquet(parquet_path)
 
 
 def build_hnsw(
@@ -62,17 +61,38 @@ def build_hnsw(
     metadata_path: Path,
     m: int = 64,
     ef_construction: int = 200,
+    embedding_col: str = "embedding",
+    extra_capacity: int = 0,
+    normalize: bool = True,
+    model_id: Optional[str] = None,
 ) -> None:
     df = load_embeddings(parquet_path)
-    embeddings = np.vstack(df["title_embedding"].to_numpy()).astype(np.float32)
+    if embedding_col not in df.columns:
+        raise ValueError(f"Column '{embedding_col}' not found in {parquet_path}")
+
+    embeddings = np.vstack(df[embedding_col].to_numpy()).astype(np.float32)
+    if normalize:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        # Avoid division by zero if blank rows sneak in.
+        norms[norms == 0] = 1.0
+        embeddings = embeddings / norms
     ids = np.arange(len(df), dtype=np.int64)
 
     hnsw = SimpleHNSW(dim=embeddings.shape[1])
-    hnsw.build(embeddings, ids, m=m, ef_construction=ef_construction)
+    hnsw.build(embeddings, ids, m=m, ef_construction=ef_construction, allow_replace_deleted=True)
+    if extra_capacity > 0:
+        hnsw.index.resize_index(len(ids) + extra_capacity)
     hnsw.save(index_path)
 
     metadata = {
         "dim": embeddings.shape[1],
+        "m": m,
+        "ef_construction": ef_construction,
+        "embedding_col": embedding_col,
+        "normalize": normalize,
+        "extra_capacity": extra_capacity,
+        "model_id": model_id or "",
+        "allow_replace_deleted": True,
         "items": [
             {"id": int(idx), "title": row.get("title", ""), "rules": row.get("rules", "")}
             for idx, row in df.iterrows()
@@ -97,6 +117,9 @@ def search_hnsw(
     if not isinstance(dim, int) or dim <= 0:
         raise ValueError("Metadata missing a valid 'dim' field.")
 
+    items = metadata.get("items", [])
+    items_by_id = {int(item["id"]): item for item in items if "id" in item}
+
     hnsw = SimpleHNSW(dim=dim)
     hnsw.load(index_path)
     hnsw.index.set_ef(ef_search)
@@ -111,7 +134,7 @@ def search_hnsw(
     labels, distances = hnsw.search(query_vec, top_k=top_k)
     results = []
     for label, dist in zip(labels[0], distances[0]):
-        hit = next((item for item in metadata["items"] if item["id"] == int(label)), None)
+        hit = items_by_id.get(int(label))
         if hit:
             results.append(
                 {
@@ -141,6 +164,29 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Construction time ef parameter.",
     )
+    build_p.add_argument(
+        "--embedding-col",
+        type=str,
+        default="embedding",
+        help="Which embedding column in the parquet to index (e.g., embedding, title_embedding).",
+    )
+    build_p.add_argument(
+        "--extra-capacity",
+        type=int,
+        default=0,
+        help="Pre-reserve additional slots for future inserts.",
+    )
+    build_p.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Skip re-normalizing embeddings before indexing.",
+    )
+    build_p.add_argument(
+        "--model-id",
+        type=str,
+        default="",
+        help="Optional model identifier to record in metadata for traceability.",
+    )
 
     search_p = subparsers.add_parser("search", help="Query the HNSW index with a text prompt.")
     search_p.add_argument("--query", required=True, help="Query text to embed and search.")
@@ -162,6 +208,10 @@ def main() -> None:
             metadata_path=args.metadata_path,
             m=args.m,
             ef_construction=args.ef_construction,
+            embedding_col=args.embedding_col,
+            extra_capacity=args.extra_capacity,
+            normalize=not args.no_normalize,
+            model_id=args.model_id or None,
         )
     elif args.command == "search":
         results = search_hnsw(

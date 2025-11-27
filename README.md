@@ -33,7 +33,7 @@ python src/index.py build \
   --index-path data/rules_hnsw.bin \
   --metadata-path data/rules_metadata.json
 ```
-If you want a title-only index, change the stack column in `src/index.py` (`title_embedding`) and write to a different index/metadata file.
+If you want a title-only index, pass `--embedding-col title_embedding` (and optionally `--extra-capacity` to pre-reserve space for future inserts); write to a different index/metadata file.
 
 Search
 ------
@@ -65,3 +65,4 @@ Notes
 -----
 - After regenerating embeddings (or appending via `match`), rerun `index.py build` to keep the HNSW index in sync.
 - For better quality, you can switch to a stronger model (point `--model` to the new directory), regenerate embeddings, and rebuild the index.
+- Programmatic search: `from src.sim import Sim; text, index_path = Sim.test(query="...", dataset_path="data/rules_metadata.json", model_path="dir")`
