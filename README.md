@@ -66,3 +66,22 @@ Notes
 - After regenerating embeddings (or appending via `match`), rerun `index.py build` to keep the HNSW index in sync.
 - For better quality, you can switch to a stronger model (point `--model` to the new directory), regenerate embeddings, and rebuild the index.
 - Programmatic search: `from src.sim import Sim; text, index_path = Sim.test(query="...", dataset_path="data/rules_metadata.json", model_path="dir")`
+
+Deploy / Serve as API
+---------------------
+1) Install deps (example):
+```bash
+python -m pip install fastapi "uvicorn[standard]" sentence-transformers hnswlib pandas pyarrow
+```
+2) Start the service (defaults: metadata `data/rules_metadata.json`, model `dir`, port 8000):
+```bash
+chmod +x scripts/run_server.sh
+HOST=0.0.0.0 PORT=8000 METADATA_PATH=data/rules_metadata.json MODEL_PATH=dir ./scripts/run_server.sh
+```
+3) Call the API:
+```bash
+curl -X POST "http://localhost:8000/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Egg price < $3.00 by September 30, 2025?", "top_k":5}'
+```
+Health check: `curl http://localhost:8000/health`
