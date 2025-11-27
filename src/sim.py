@@ -32,7 +32,7 @@ class Sim:
         )
 
     @staticmethod
-    def test(query: str, dataset_path: str | Path, model_path: Optional[str | Path] = None) -> Tuple[str, Path]:
+    def query(query: str, dataset_path: str | Path, model_path: Optional[str | Path] = None) -> Tuple[str, Path]:
         """
         Search the HNSW index associated with the given metadata JSON.
 
@@ -93,3 +93,26 @@ class Sim:
             f"{hit.get('title', '')}\n{hit.get('rules', '')}"
         )
         return best_match_text, index_path
+
+    @staticmethod
+    def agent(query: str, dataset_path: str | Path, model_path: Optional[str | Path] = None) -> dict:
+        """
+        调用 workflow2，判定原 query 与检索到的 top-1 是否同一事件。
+
+        返回形如 {"same_event": "yes|no|unknown", "reason": "..."}。
+        """
+        # 按需引入，避免循环依赖在加载时触发。
+        from src.agent.workflow2 import run_once
+
+        try:
+            result_text = run_once(
+                query,
+                str(dataset_path),
+                model_path=str(model_path) if model_path else None,
+            )
+            try:
+                return json.loads(result_text)
+            except Exception:
+                return {"same_event": "unknown", "reason": f"无法解析判定结果：{result_text}"}
+        except Exception as e:
+            return {"same_event": "unknown", "reason": f"error: {e}"}
