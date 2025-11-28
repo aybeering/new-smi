@@ -1,0 +1,12 @@
+numpy
+pandas
+pyarrow
+hnswlib
+sentence-transformers
+fastapi
+uvicorn[standard]
+pydantic
+langgraph
+langchain-core
+openai
+tavily-python
