@@ -108,7 +108,7 @@ class Sim:
         """
         调用 workflow2，判定原 query 与检索到的 top-1 是否同一事件。
 
-        返回形如 {"same_event": "yes|no|unknown", "reason": "...", "title": "..."}。
+        返回形如 {"same_event": true|false|"unknown", "reason": "...", "title": "...", "analysis": {...}}。
         """
         # 按需引入，避免循环依赖在加载时触发。
         from src.agent.workflow2 import run_once

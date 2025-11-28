@@ -21,8 +21,9 @@ class JudgeState(TypedDict, total=False):
     retrieved_text: str | None
     index_path: str | None
     score: float | None
-    llm_judgment: str | None
+    llm_judgment: bool | str | None
     reason: str | None
+    analysis: dict | None
     step: str | None
     error: str | None
 
@@ -76,15 +77,60 @@ def judge_node(state: JudgeState) -> dict:
     retrieved = state.get("retrieved_text") or ""
 
     prompt = f"""
-你需要判断两句话是否描述同一件具体事件,不用做到全都一致，有一些数字或者时间上的微小差距可以忽略判断标准：主体、时间、动作是否匹配。
-句子A（用户原问）：{query}
-句子B（检索Top-1）：{retrieved}
+You are an Event Equivalence Evaluation Assistant.
+Your task is to determine whether two sentences describe the same real-world event.
+Follow the rules below rigorously and output a structured conclusion with clear reasoning.
 
-请回答 JSON：
+Core Evaluation Principles
+
+Event Theme Consistency
+Two sentences may be considered the same event if their core theme aligns, even when phrased differently.
+Core elements include:
+- Actor (person, organization, institution, country)
+- Action (e.g., rises, falls, announces, investigated, wins, loses)
+- Object or target (e.g., Bitcoin price, team ranking, company product, policy)
+
+Time Tolerance Rule
+If the time difference between the two sentences is within 30 days, treat them as potentially the same event.
+If a sentence does not explicitly state a time but the context strongly aligns, it may still qualify as the same event.
+
+Numerical Range Rule
+When the event description contains numeric values (price, amount, percentage, ranking, population, etc.), evaluate them as follows:
+- For a given number N, allow a tolerance window of ± 1× the highest digit unit.
+- Examples:
+  - For 10, acceptable range is 0–20.
+  - For 90,000, acceptable range is 80,000–100,000.
+- If both sentences' numeric values fall within each other's tolerance window, consider them equivalent.
+
+Contextual and Causal Alignment
+If background, causal links, affected subjects, and scenario conditions are aligned, consider the two sentences to be the same event even if wording differs significantly.
+
+Conflict Priority Rule
+The two sentences must be treated as different events if any of the following holds:
+- Time difference exceeds 1 month and continuity is not implied
+- Numeric difference falls outside the defined tolerance range
+- Opposite directional behavior (e.g., rise vs. fall, increase vs. decrease)
+- Different actors, different objects, or unrelated scenario context
+- Mutually exclusive conditions (different locations, competitions, markets, etc.)
+
+Output Format Requirements
+
+Return your evaluation in the following JSON format:
+
 {{
-  "same_event": "yes|no|unknown",
-  "reason": "简要说明主体/时间/动作是否匹配，若信息不足说明不足之处"
+  "same_event": true or false,
+  "reason": "A concise explanation referencing time, numbers, theme, and entities.",
+  "analysis": {{
+    "theme_similarity": "...",
+    "time_evaluation": "...",
+    "number_evaluation": "...",
+    "entity_alignment": "..."
+  }}
 }}
+
+Sentence A: {query}
+Sentence B: {retrieved}
+Respond with JSON only.
 """
     client = _get_llm()
     resp = client.chat.completions.create(
@@ -93,12 +139,26 @@ def judge_node(state: JudgeState) -> dict:
         temperature=0.0,
     )
     content = resp.choices[0].message.content if resp.choices else ""
-    judgment = "unknown"
+    judgment: bool | str = "unknown"
     reason = ""
+    analysis = None
     try:
         parsed = json.loads(content)
-        judgment = str(parsed.get("same_event") or "unknown").lower()
+        raw_same = parsed.get("same_event")
+        if isinstance(raw_same, bool):
+            judgment = raw_same
+        elif isinstance(raw_same, str):
+            lowered = raw_same.strip().lower()
+            if lowered in {"true", "yes", "1"}:
+                judgment = True
+            elif lowered in {"false", "no", "0"}:
+                judgment = False
+            else:
+                judgment = "unknown"
+        else:
+            judgment = "unknown"
         reason = parsed.get("reason") or ""
+        analysis = parsed.get("analysis") if isinstance(parsed.get("analysis"), dict) else None
     except Exception:
         # 回退：保留原始输出，标记未知
         judgment = "unknown"
@@ -107,6 +167,7 @@ def judge_node(state: JudgeState) -> dict:
     return {
         "llm_judgment": judgment,
         "reason": reason,
+        "analysis": analysis,
         "step": "completed",
         "messages": state["messages"] + [AIMessage(content=content)],
     }
@@ -142,6 +203,7 @@ def run_workflow(query: str, dataset_path: str, model_path: Optional[str] = None
             "score": None,
             "llm_judgment": None,
             "reason": None,
+            "analysis": None,
             "step": None,
             "error": None,
         },
@@ -156,5 +218,6 @@ def run_once(query: str, dataset_path: str, model_path: Optional[str] = None) ->
         "same_event": final_state.get("llm_judgment", "unknown"),
         "reason": final_state.get("reason", ""),
         "title": final_state.get("retrieved_text", ""),
+        "analysis": final_state.get("analysis") or {},
     }
     return json.dumps(result, ensure_ascii=False)
