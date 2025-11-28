@@ -32,12 +32,16 @@ class Sim:
         )
 
     @staticmethod
-    def query(query: str, dataset_path: str | Path, model_path: Optional[str | Path] = None) -> Tuple[str, Path]:
+    def query(
+        query: str,
+        dataset_path: str | Path,
+        model_path: Optional[str | Path] = None,
+    ) -> Tuple[str, Path]:
         """
         Search the HNSW index associated with the given metadata JSON.
 
-        Returns a tuple of (best_match_text, index_path).
-        best_match_text includes title/rules and similarity score.
+        Returns a tuple of (best_match_title, index_path).
+        Only the top-1 title is returned.
         """
 
         started = time.perf_counter()
@@ -79,27 +83,32 @@ class Sim:
         labels, distances = hnsw.search(query_vec, top_k=1)
         search_ms = (time.perf_counter() - encode_started) * 1000 - encode_ms
         label = int(labels[0][0])
-        dist = float(distances[0][0])
         hit = items_by_id.get(label)
         if not hit:
             raise ValueError("No matching item found in metadata for the returned label.")
 
-        score = 1 - dist
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        best_match_text = (
-            f"[id={label}] score={score:.4f} latency_ms={elapsed_ms:.2f} "
-            f"model_load_ms={model_load_ms:.2f} hnsw_load_ms={hnsw_load_ms:.2f} "
-            f"encode_ms={encode_ms:.2f} search_ms={search_ms:.2f}\n"
-            f"{hit.get('title', '')}\n{hit.get('rules', '')}"
+        best_match_text = hit.get("title", "")
+        # Latency metrics are kept for potential downstream logging.
+        _ = (
+            1 - float(distances[0][0]),
+            (time.perf_counter() - started) * 1000,
+            model_load_ms,
+            hnsw_load_ms,
+            encode_ms,
+            search_ms,
         )
         return best_match_text, index_path
 
     @staticmethod
-    def agent(query: str, dataset_path: str | Path, model_path: Optional[str | Path] = None) -> dict:
+    def agent(
+        query: str,
+        dataset_path: str | Path,
+        model_path: Optional[str | Path] = None,
+    ) -> dict:
         """
         调用 workflow2，判定原 query 与检索到的 top-1 是否同一事件。
 
-        返回形如 {"same_event": "yes|no|unknown", "reason": "..."}。
+        返回形如 {"same_event": "yes|no|unknown", "reason": "...", "title": "..."}。
         """
         # 按需引入，避免循环依赖在加载时触发。
         from src.agent.workflow2 import run_once

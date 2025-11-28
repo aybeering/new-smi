@@ -41,10 +41,14 @@ def retrieve_node(state: JudgeState) -> dict:
     model_path = state.get("model_path")
 
     try:
-        best_match_text, index_path = Sim.query(query, dataset_path, model_path=model_path)
-        msg = f"✅ 已检索到 top-1\n{best_match_text}"
+        best_match_title, index_path = Sim.query(
+            query,
+            dataset_path,
+            model_path=model_path,
+        )
+        msg = f"✅ 已检索到 top-1\n{best_match_title}"
         return {
-            "retrieved_text": best_match_text,
+            "retrieved_text": best_match_title,
             "index_path": str(index_path),
             "step": "retrieved",
             "messages": state["messages"] + [AIMessage(content=msg)],
@@ -151,5 +155,6 @@ def run_once(query: str, dataset_path: str, model_path: Optional[str] = None) ->
     result = {
         "same_event": final_state.get("llm_judgment", "unknown"),
         "reason": final_state.get("reason", ""),
+        "title": final_state.get("retrieved_text", ""),
     }
     return json.dumps(result, ensure_ascii=False)
